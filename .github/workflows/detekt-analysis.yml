@@ -40,15 +40,15 @@ jobs:
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     # Gets the download URL associated with the $DETEKT_RELEASE_TAG
     - name: Get Detekt download URL
       id: detekt_info
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        DETEKT_DOWNLOAD_URL=$( gh api graphql --field tagName=$DETEKT_RELEASE_TAG --raw-field query='
+      run: |      
+        gh api graphql --field tagName=$DETEKT_RELEASE_TAG --raw-field query='
           query getReleaseAssetDownloadUrl($tagName: String!) {
             repository(name: "detekt", owner: "detekt") {
               release(tagName: $tagName) {
@@ -57,12 +57,38 @@ jobs:
                     downloadUrl
                   }
                 }
+                tagCommit {
+                  oid
+                }
               }
             }
           }
-        ' | \
-        jq --raw-output '.data.repository.release.releaseAssets.nodes[0].downloadUrl' )
-        echo "::set-output name=download_url::$DETEKT_DOWNLOAD_URL"
+        ' 1> gh_response.json
+
+        DETEKT_RELEASE_SHA=$(jq --raw-output '.data.repository.release.releaseAssets.tagCommit.oid' gh_response.json)
+        if [ $DETEKT_RELEASE_SHA != "37f0a1d006977512f1f216506cd695039607c3e5" ]; then
+          echo "Release tag doesn't match expected commit SHA"
+          exit 1
+        fi
+
+        DETEKT_DOWNLOAD_URL=$(jq --raw-output '.data.repository.release.releaseAssets.nodes[0].downloadUrl' gh_response.json)
+        echo "download_url=$DETEKT_DOWNLOAD_URL" >> $GITHUB_OUTPUT
+        
+        # DETEKT_DOWNLOAD_URL=$( gh api graphql --field tagName=$DETEKT_RELEASE_TAG --raw-field query='
+        #   query getReleaseAssetDownloadUrl($tagName: String!) {
+        #     repository(name: "detekt", owner: "detekt") {
+        #       release(tagName: $tagName) {
+        #         releaseAssets(name: "detekt", first: 1) {
+        #           nodes {
+        #             downloadUrl
+        #           }
+        #         }
+        #       }
+        #     }
+        #   }
+        # ' | \
+        # jq --raw-output '.data.repository.release.releaseAssets.nodes[0].downloadUrl' )
+        # echo "::set-output name=download_url::$DETEKT_DOWNLOAD_URL"
 
     # Sets up the detekt cli
     - name: Setup Detekt
@@ -96,7 +122,7 @@ jobs:
         )" > ${{ github.workspace }}/detekt.sarif.json
 
     # Uploads results to GitHub repository using the upload-sarif action
-    - uses: github/codeql-action/upload-sarif@v2
+    - uses: github/codeql-action/upload-sarif@v3
       with:
         # Path to SARIF file relative to the root of the repository
         sarif_file: ${{ github.workspace }}/detekt.sarif.json
